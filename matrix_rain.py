@@ -137,10 +137,10 @@ HAZE_ENABLED = True
 HAZE_COLOR = (0, 255, 0)
 HAZE_ALPHA = 10
 
-# --- CRT Grid Overlay ---
+# --- CRT Scanlines Overlay ---
 CRT_GRID_ENABLED = True
-CRT_GRID_SIZE = 3
-CRT_GRID_COLOR = (0, 0, 0, 40)
+CRT_SCANLINE_SPACING = 2  # Every 2 pixels for subtle effect
+CRT_SCANLINE_ALPHA = 40  # More visible scanlines
 
 # --- General Streak Behavior ---
 LEADER_BRIGHTNESS_SPEED_MULTIPLIER = 1
@@ -692,12 +692,15 @@ class Column:
 
 
 def draw_crt_grid(surface, grid_size, color):
+    """Draw authentic CRT scanlines (horizontal only) with variable intensity."""
     surface.fill((0, 0, 0, 0))
     width, height = surface.get_size()
-    for x in range(0, width, grid_size):
-        pygame.draw.line(surface, color, (x, 0), (x, height))
-    for y in range(0, height, grid_size):
-        pygame.draw.line(surface, color, (0, y), (width, y))
+    
+    # Authentic CRT: horizontal scanlines only, alternating intensity
+    for y in range(0, height, CRT_SCANLINE_SPACING):
+        # Alternate between darker and lighter scanlines for realism
+        alpha = CRT_SCANLINE_ALPHA if (y // CRT_SCANLINE_SPACING) % 2 == 0 else CRT_SCANLINE_ALPHA // 2
+        pygame.draw.line(surface, (0, 0, 0, alpha), (0, y), (width, y))
 
 def main():
     global HAZE_ENABLED, CRT_GRID_ENABLED, COLOR_QUANTIZATION_STEP, FRAME_RATE
@@ -948,7 +951,7 @@ def main():
     ripple_manager = RippleManager(total_width, total_height)
 
     if CRT_GRID_ENABLED:
-        draw_crt_grid(grid_surface, CRT_GRID_SIZE, CRT_GRID_COLOR)
+        draw_crt_grid(grid_surface, CRT_SCANLINE_SPACING, CRT_SCANLINE_ALPHA)
     if HAZE_ENABLED:
         haze_surface.fill((*HAZE_COLOR, HAZE_ALPHA))
 
