@@ -140,7 +140,7 @@ HAZE_ALPHA = 10
 # --- CRT Scanlines Overlay ---
 CRT_GRID_ENABLED = True
 CRT_SCANLINE_SPACING = 2  # Every 2 pixels for subtle effect
-CRT_SCANLINE_ALPHA = 40  # More visible scanlines
+CRT_SCANLINE_ALPHA = 60  # Increased visibility (was 25)
 
 # --- General Streak Behavior ---
 LEADER_BRIGHTNESS_SPEED_MULTIPLIER = 1
