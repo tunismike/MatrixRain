@@ -14,6 +14,10 @@ dist/
 # macOS
 .DS_Store
 *.icns
+*.app/
+
+# Compiled binaries
+MatrixScreensaver
 
 # IDE
 .idea/
