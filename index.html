@@ -29,12 +29,42 @@
 
     canvas {
       display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    /* Pulsing vignette overlay — CSS-only, zero JS cost */
+    #vignette {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10;
+      background: radial-gradient(ellipse at center,
+          transparent 40%,
+          rgba(0, 0, 0, 0.5) 80%,
+          rgba(0, 0, 0, 0.85) 100%);
+      animation: vignettePulse 8s ease-in-out infinite alternate;
+    }
+
+    @keyframes vignettePulse {
+      0% {
+        opacity: 0.6;
+      }
+
+      100% {
+        opacity: 1.0;
+      }
     }
   </style>
 </head>
 
 <body>
   <canvas id="matrix"></canvas>
+  <!-- Bloom composite layer -->
+  <canvas id="bloom" style="z-index:2; mix-blend-mode: screen; opacity: 0.5; pointer-events:none;"></canvas>
+  <!-- CSS vignette -->
+  <div id="vignette"></div>
   <script>
     // ============================================================================
     // MATRIX RAIN FX — JavaScript/HTML5 Canvas Port
@@ -565,6 +595,12 @@
           // Quantize
           finalColor = quantizeColor(finalColor[0], finalColor[1], finalColor[2], COLOR_QUANTIZATION_STEP);
 
+          // ========== Leader Glow via shadowBlur ==========
+          if (isLeader) {
+            ctx.shadowColor = 'rgba(180, 255, 200, 0.6)';
+            ctx.shadowBlur = 8;
+          }
+
           // Draw the character with vertical stretch
           const yPos = ch.y;
           ctx.fillStyle = colorToCSS(finalColor[0], finalColor[1], finalColor[2]);
@@ -596,6 +632,12 @@
           }
 
           ctx.restore();
+
+          // Reset shadow after leader
+          if (isLeader) {
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 0;
+          }
         }
 
         // Update cascade position
@@ -634,6 +676,11 @@
       const canvas = document.getElementById('matrix');
       const ctx = canvas.getContext('2d');
 
+      // Bloom canvas
+      const bloomCanvas = document.getElementById('bloom');
+      const bloomCtx = bloomCanvas.getContext('2d');
+
+
       let W, H;
       let columns = [];
       let cascadeManager;
@@ -656,7 +703,8 @@
         H = window.innerHeight;
         canvas.width = W;
         canvas.height = H;
-
+        bloomCanvas.width = W;
+        bloomCanvas.height = H;
         buildFont();
 
         const config = {
@@ -740,15 +788,26 @@
           if (ripplesEnabled) rippleManager.update(dt);
 
           // Haze overlay
+          // Screen blend haze — richer atmosphere than plain alpha
           if (HAZE_ENABLED) {
+            ctx.globalCompositeOperation = 'screen';
             ctx.fillStyle = colorToCSS(HAZE_COLOR[0], HAZE_COLOR[1], HAZE_COLOR[2], HAZE_ALPHA / 255);
             ctx.fillRect(0, 0, W, H);
+            ctx.globalCompositeOperation = 'source-over';
           }
 
           // CRT scanlines
           if (CRT_GRID_ENABLED && crtOverlay) {
             ctx.drawImage(crtOverlay, 0, 0);
           }
+
+          // ========== Bloom Pass ==========
+          bloomCtx.clearRect(0, 0, W, H);
+          bloomCtx.filter = 'blur(6px) brightness(1.5)';
+          bloomCtx.drawImage(canvas, 0, 0);
+          bloomCtx.filter = 'none';
+
+
 
           // FPS in title
           if (dt > 0) {
