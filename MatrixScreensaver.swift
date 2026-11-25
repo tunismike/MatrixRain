@@ -781,6 +781,7 @@ class ScreensaverAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         }
 
         logLine("screenParametersChanged detected layout change; settling before rebuild...")
+        for window in windows { window.backgroundColor = .black }
         for webView in webViews { webView.isHidden = true }
 
         rebuildWork?.cancel()
@@ -822,8 +823,16 @@ class ScreensaverAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         )
 
         window.isReleasedWhenClosed = false
-        window.backgroundColor = .black
-        window.isOpaque = true
+        if isScreensaverMode {
+            // Visually transparent so the initial rain can fall directly over
+            // the live desktop before the shader fades the black backdrop in,
+            // while alpha > 0 keeps WindowServer hit-testing clicks cleanly.
+            window.isOpaque = false
+            window.backgroundColor = NSColor(white: 0.0, alpha: 0.004)
+        } else {
+            window.backgroundColor = .black
+            window.isOpaque = true
+        }
         window.hasShadow = false
         window.alphaValue = initialAlpha
         window.acceptsMouseMovedEvents = isScreensaverMode
