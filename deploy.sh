@@ -3,6 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUNTIME_DIR="$HOME/.matrix_screensaver"
+APP_BUNDLE="$RUNTIME_DIR/MatrixScreensaver.app"
 PLIST_DEST="$HOME/Library/LaunchAgents/com.matrix.screensaver.plist"
 LABEL="com.matrix.screensaver"
 UID_NUM="$(id -u)"
@@ -13,15 +14,45 @@ swiftc -O \
   "$PROJECT_DIR/MatrixScreensaver.swift" \
   -framework Cocoa \
   -framework WebKit \
-  -framework IOKit
+  -framework IOKit \
+  -framework ScreenCaptureKit
 
-mkdir -p "$RUNTIME_DIR"
+mkdir -p "$RUNTIME_DIR" "$APP_BUNDLE/Contents/MacOS"
 
-echo "==> Installing binary to $RUNTIME_DIR/MatrixScreensaver..."
-# Atomic replace so a running binary is never overwritten in place
-cp "$PROJECT_DIR/MatrixScreensaver" "$RUNTIME_DIR/MatrixScreensaver.new"
-chmod +x "$RUNTIME_DIR/MatrixScreensaver.new"
-mv -f "$RUNTIME_DIR/MatrixScreensaver.new" "$RUNTIME_DIR/MatrixScreensaver"
+echo "==> Packaging $APP_BUNDLE..."
+cat > "$APP_BUNDLE/Contents/Info.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>MatrixScreensaver</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.matrix.screensaver</string>
+    <key>CFBundleName</key>
+    <string>MatrixScreensaver</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>2.0</string>
+    <key>CFBundleVersion</key>
+    <string>2</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+EOF
+
+# Atomic replace inside app bundle so a running binary is never overwritten in place
+cp "$PROJECT_DIR/MatrixScreensaver" "$APP_BUNDLE/Contents/MacOS/MatrixScreensaver.new"
+chmod +x "$APP_BUNDLE/Contents/MacOS/MatrixScreensaver.new"
+mv -f "$APP_BUNDLE/Contents/MacOS/MatrixScreensaver.new" "$APP_BUNDLE/Contents/MacOS/MatrixScreensaver"
+
+# Ad-hoc sign with stable bundle identifier for Screen Recording permission
+codesign --force --sign - --identifier com.matrix.screensaver "$APP_BUNDLE" >/dev/null 2>&1 || true
+
+# Keep top-level symlink so existing CLI invocations continue working
+ln -sfn "$APP_BUNDLE/Contents/MacOS/MatrixScreensaver" "$RUNTIME_DIR/MatrixScreensaver"
 
 if [ ! -f "$RUNTIME_DIR/config.ini" ]; then
   echo "==> Installing initial config.ini..."

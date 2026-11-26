@@ -7,7 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/miketunis/.matrix_screensaver/MatrixScreensaver</string>
+        <string>/Users/miketunis/.matrix_screensaver/MatrixScreensaver.app/Contents/MacOS/MatrixScreensaver</string>
         <string>--daemon</string>
     </array>
 

@@ -3,6 +3,7 @@ import WebKit
 import IOKit
 import IOKit.pwr_mgt
 import IOKit.ps
+import ScreenCaptureKit
 import Darwin
 
 // ============================================================================
@@ -222,6 +223,7 @@ struct ScreensaverConfig {
     var ignoreAssertionProcesses: Set<String> = ["antigravity", "rustdesk"]
     var fadeInSeconds: Double = 0.35
     var fadeOutSeconds: Double = 0.15
+    var glitchIntro: Bool = true
 
     static func load(baseDir: URL, configPath: URL? = nil, htmlOverride: URL? = nil) -> ScreensaverConfig {
         let cfgURL = configPath ?? baseDir.appendingPathComponent("config.ini")
@@ -286,6 +288,8 @@ struct ScreensaverConfig {
                 if let v = Double(value), v >= 0 { cfg.fadeInSeconds = v }
             case "fadeoutseconds":
                 if let v = Double(value), v >= 0 { cfg.fadeOutSeconds = v }
+            case "glitchintro":
+                cfg.glitchIntro = parseBool(value, default: cfg.glitchIntro)
             default:
                 break
             }
@@ -604,6 +608,88 @@ class DaemonDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// MARK: - Screen Capture (for Reality-Glitch Intro)
+
+struct DisplayCaptureSpec: Sendable {
+    let displayID: CGDirectDisplayID
+    let targetWidth: Int
+    let targetHeight: Int
+}
+
+enum ScreenCaptureHelper {
+    static func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)
+            .map { CGDirectDisplayID($0.uint32Value) }
+    }
+
+    static func specs(for screens: [NSScreen]) -> [DisplayCaptureSpec] {
+        screens.compactMap { screen in
+            guard let id = displayID(for: screen) else { return nil }
+            let scale = min(screen.backingScaleFactor, 2.0)
+            let rawW = screen.frame.width * scale
+            let rawH = screen.frame.height * scale
+            let maxDim: CGFloat = 2560.0
+            let clampScale = rawW > maxDim ? (maxDim / rawW) : 1.0
+            let w = max(1, Int((rawW * clampScale).rounded()))
+            let h = max(1, Int((rawH * clampScale).rounded()))
+            return DisplayCaptureSpec(displayID: id, targetWidth: w, targetHeight: h)
+        }
+    }
+
+    static func captureAll(specs: [DisplayCaptureSpec]) async -> [CGDirectDisplayID: String] {
+        guard !specs.isEmpty, CGPreflightScreenCaptureAccess() else { return [:] }
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(
+                false,
+                onScreenWindowsOnly: true
+            )
+            let scByID = Dictionary(uniqueKeysWithValues: content.displays.map { ($0.displayID, $0) })
+
+            return await withTaskGroup(of: (CGDirectDisplayID, String)?.self) { group in
+                for spec in specs {
+                    guard let scDisplay = scByID[spec.displayID] else { continue }
+                    group.addTask {
+                        let filter = SCContentFilter(display: scDisplay, excludingWindows: [])
+                        let cfg = SCStreamConfiguration()
+                        cfg.width = spec.targetWidth
+                        cfg.height = spec.targetHeight
+                        cfg.showsCursor = false
+                        cfg.scalesToFit = true
+                        do {
+                            let cgImage = try await SCScreenshotManager.captureImage(
+                                contentFilter: filter,
+                                configuration: cfg
+                            )
+                            let rep = NSBitmapImageRep(cgImage: cgImage)
+                            guard let jpeg = rep.representation(
+                                using: .jpeg,
+                                properties: [.compressionFactor: 0.88]
+                            ) else {
+                                return nil
+                            }
+                            return (spec.displayID, "data:image/jpeg;base64," + jpeg.base64EncodedString())
+                        } catch {
+                            logLine("Screen capture failed for display \(spec.displayID): \(error.localizedDescription)")
+                            return nil
+                        }
+                    }
+                }
+
+                var result: [CGDirectDisplayID: String] = [:]
+                for await item in group {
+                    if let (id, url) = item {
+                        result[id] = url
+                    }
+                }
+                return result
+            }
+        } catch {
+            logLine("SCShareableContent failed: \(error.localizedDescription)")
+            return [:]
+        }
+    }
+}
+
 // MARK: - Screensaver / Wallpaper Mode
 
 class MatrixWindow: NSWindow {
@@ -692,8 +778,6 @@ class ScreensaverAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         initialMouseLocation = NSEvent.mouseLocation
         maxObservedIdle = SystemState.hidIdleSeconds()
 
-        buildWindows(animated: isScreensaverMode && config.fadeInSeconds > 0)
-
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(screenParametersChanged),
@@ -706,12 +790,38 @@ class ScreensaverAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
             installRemoteIdleWatcher()
             acquirePowerAssertionsIfAllowed()
             configurePowerLimits()
-        } else if isWallpaperMode {
-            // Wallpaper mode does not hold display-sleep assertions
         }
 
         installSignalHandlers { [weak self] in
             self?.exitAll(animated: true)
+        }
+
+        if isScreensaverMode && config.glitchIntro && CGPreflightScreenCaptureAccess() {
+            let specs = ScreenCaptureHelper.specs(for: NSScreen.screens)
+            var didBuild = false
+            let finish: ([CGDirectDisplayID: String]) -> Void = { [weak self] captures in
+                guard let self = self, !self.isExiting, !didBuild else { return }
+                didBuild = true
+                let useFade = captures.isEmpty && self.config.fadeInSeconds > 0
+                self.buildWindows(animated: useFade, captures: captures)
+            }
+
+            // Safety timeout so ScreenCaptureKit can never stall launch
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                if !didBuild {
+                    logLine("Screen capture timed out; falling back to transparent intro.")
+                    finish([:])
+                }
+            }
+
+            Task {
+                let captures = await ScreenCaptureHelper.captureAll(specs: specs)
+                DispatchQueue.main.async {
+                    finish(captures)
+                }
+            }
+        } else {
+            buildWindows(animated: isScreensaverMode && config.fadeInSeconds > 0, captures: [:])
         }
     }
 
@@ -722,10 +832,11 @@ class ScreensaverAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         }.joined(separator: "|")
     }
 
-    func buildWindows(animated: Bool) {
+    func buildWindows(animated: Bool, captures: [CGDirectDisplayID: String] = [:]) {
         let initialAlpha: CGFloat = animated ? 0.0 : 1.0
         for (index, screen) in NSScreen.screens.enumerated() {
-            createWindow(on: screen, displayIndex: index, initialAlpha: initialAlpha)
+            let captureURL = ScreenCaptureHelper.displayID(for: screen).flatMap { captures[$0] }
+            createWindow(on: screen, displayIndex: index, initialAlpha: initialAlpha, captureDataURL: captureURL)
         }
         screenSignature = currentScreenSignature()
 
@@ -811,7 +922,7 @@ class ScreensaverAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         )
     }
 
-    func createWindow(on screen: NSScreen, displayIndex: Int, initialAlpha: CGFloat) {
+    func createWindow(on screen: NSScreen, displayIndex: Int, initialAlpha: CGFloat, captureDataURL: String? = nil) {
         let frame = screen.frame
 
         let window = MatrixWindow(
@@ -848,6 +959,14 @@ class ScreensaverAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
 
         let wkConfig = WKWebViewConfiguration()
         wkConfig.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        if let captureURL = captureDataURL {
+            let script = WKUserScript(
+                source: "window.__matrixCapture = '\(captureURL)';",
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+            wkConfig.userContentController.addUserScript(script)
+        }
 
         let webView = WKWebView(frame: window.contentView!.bounds, configuration: wkConfig)
         webView.navigationDelegate = self
@@ -1051,9 +1170,20 @@ class ScreensaverAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
 
 // MARK: - Main Entrypoint
 
+func resolveBaseDir(executableURL: URL) -> URL {
+    let dir = executableURL.deletingLastPathComponent()
+    if dir.lastPathComponent == "MacOS",
+       dir.deletingLastPathComponent().lastPathComponent == "Contents",
+       dir.deletingLastPathComponent().deletingLastPathComponent().pathExtension == "app" {
+        return dir.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    }
+    return dir
+}
+
 let args = CommandLine.arguments
-let executablePath = URL(fileURLWithPath: args[0]).standardizedFileURL.path
-let executableDir = URL(fileURLWithPath: executablePath).deletingLastPathComponent()
+let executableURL = URL(fileURLWithPath: args[0]).resolvingSymlinksInPath().standardizedFileURL
+let executablePath = executableURL.path
+let executableDir = resolveBaseDir(executableURL: executableURL)
 
 func argValue(_ flag: String) -> String? {
     guard let idx = args.firstIndex(of: flag), idx + 1 < args.count else { return nil }
@@ -1064,9 +1194,23 @@ let isDaemon = args.contains("--daemon")
 let isScreensaver = args.contains("--screensaver")
 let isWallpaper = args.contains("--wallpaper")
 let isStatus = args.contains("--status")
+let isRequestPerm = args.contains("--request-screen-permission")
+let noGlitch = args.contains("--no-glitch")
 
 let configOverride = argValue("--config").map { URL(fileURLWithPath: $0) }
 let htmlOverride = argValue("--html").map { URL(fileURLWithPath: $0) }
+
+if isRequestPerm {
+    let already = CGPreflightScreenCaptureAccess()
+    if already {
+        print("Screen Recording permission is already granted.")
+    } else {
+        let granted = CGRequestScreenCaptureAccess()
+        print("Requested Screen Recording permission (granted=\(granted)).")
+        print("If prompted, enable MatrixScreensaver in System Settings > Privacy & Security > Screen & System Audio Recording.")
+    }
+    exit(0)
+}
 
 if isStatus {
     let cfg = ScreensaverConfig.load(baseDir: executableDir, configPath: configOverride, htmlOverride: htmlOverride)
@@ -1083,6 +1227,7 @@ if isStatus {
     print("  Enabled:         \(cfg.enabled)")
     print("  Idle Threshold:  \(Int(cfg.idleTimeSeconds))s")
     print("  HTML Path:       \(cfg.htmlURL.path) (exists=\(FileManager.default.fileExists(atPath: cfg.htmlURL.path)))")
+    print("  Glitch Intro:    \(cfg.glitchIntro) (permission=\(CGPreflightScreenCaptureAccess()))")
     print("  Fade In / Out:   \(cfg.fadeInSeconds)s / \(cfg.fadeOutSeconds)s")
     print("  Max Duration:    \(cfg.maxDurationSeconds == 0 ? "unlimited" : "\(Int(cfg.maxDurationSeconds))s")")
     print("  Sleep on Batt:   \(cfg.allowDisplaySleepOnBattery)")
@@ -1115,11 +1260,12 @@ if isDaemon {
     app.delegate = delegate
     app.run()
 } else if isScreensaver || isWallpaper {
-    let cfg = ScreensaverConfig.load(
+    var cfg = ScreensaverConfig.load(
         baseDir: executableDir,
         configPath: configOverride,
         htmlOverride: htmlOverride
     )
+    if noGlitch { cfg.glitchIntro = false }
     guard FileManager.default.fileExists(atPath: cfg.htmlURL.path) else {
         logLine("Error: Cannot find \(cfg.htmlURL.path)")
         logLine("Place index.html next to this executable, or use --html /path/to/index.html")
@@ -1135,6 +1281,6 @@ if isDaemon {
     app.delegate = delegate
     app.run()
 } else {
-    print("Usage: MatrixScreensaver [--daemon | --screensaver | --wallpaper | --status] [--html PATH] [--config PATH]")
+    print("Usage: MatrixScreensaver [--daemon | --screensaver | --wallpaper | --status | --request-screen-permission] [--html PATH] [--config PATH] [--no-glitch]")
     exit(1)
 }
