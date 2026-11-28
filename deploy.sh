@@ -59,6 +59,11 @@ if [ ! -f "$RUNTIME_DIR/config.ini" ]; then
   cp "$PROJECT_DIR/config.ini" "$RUNTIME_DIR/config.ini"
 fi
 
+if [ -d "$PROJECT_DIR/rezmason-overrides" ] && [ -d "$RUNTIME_DIR/rezmason" ]; then
+  echo "==> Syncing rezmason-overrides to $RUNTIME_DIR/rezmason..."
+  cp -R "$PROJECT_DIR/rezmason-overrides/." "$RUNTIME_DIR/rezmason/"
+fi
+
 echo "==> Installing LaunchAgent plist..."
 plutil -lint "$PROJECT_DIR/com.matrix.screensaver.plist" >/dev/null
 cp "$PROJECT_DIR/com.matrix.screensaver.plist" "$PLIST_DEST"

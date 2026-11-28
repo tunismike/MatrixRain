@@ -1,0 +1,98 @@
+<!DOCTYPE html><meta charset="utf-8"><title>Matrix</title>
+<style>html,body{margin:0;height:100%;background:transparent}</style>
+<script>
+// ---------------------------------------------------------------------------
+// Per-display glyph sizing.
+//
+// The Swift launcher opens one window (and one WebView) per NSScreen, each
+// loading this file, so each display can size its own grid here.
+//
+// In Rezmason's renderer numColumns is a cell COUNT, not a size: the fragment
+// shader does fract(uv * vec2(numColumns, numRows)) with uv spanning 0..1
+// across the window, so glyph width is always windowWidth / numColumns. A
+// fixed value therefore renders physically larger glyphs on a physically
+// larger screen - 0.279" on the Dell vs 0.137" on the laptop, a 2x mismatch.
+//
+// Fix: derive numColumns from the display's physical width so a glyph is the
+// same real-world size everywhere.
+// ---------------------------------------------------------------------------
+
+// THE KNOBS. Glyph cells per inch of screen - what sets apparent size on every
+// display. Screen resolution is deliberately absent: physical glyph size is
+// (physical size / cell count), so ppi changes sharpness only.
+//   7.37 = the MacBook exactly as it looks today (other displays match it)
+// ROWS_PER_INCH is the vertical counterpart. It is NOT derived from
+// COLS_PER_INCH: upstream ties numRows to numColumns, which makes a cell's
+// aspect ratio equal to the DISPLAY's aspect ratio. Matching only width across
+// a 1728x1117 laptop (1.547) and a 2560x1440 monitor (1.778) therefore left the
+// Dell's glyphs 13% shorter than the laptop's - read as "too small" - and the
+// old per-display `trim` multiplier was compensating by making them too wide.
+// Setting rows from physical height instead makes the cell, and so the glyph,
+// geometrically identical on both.
+var COLS_PER_INCH = 7.37;    // 0.1357" per glyph across
+var ROWS_PER_INCH = 11.41;   // 0.0876" per glyph down  (the MacBook's own cell)
+
+var PANELS = [
+  { w: 1496, inches: 13.56, trimW: 1.00, trimH: 1.00, scanlineScale: 1 },  // MBP 16", "Larger Text"
+  { w: 1728, inches: 13.56, trimW: 1.00, trimH: 1.00, scanlineScale: 1 },  // MBP 16", default
+  { w: 2056, inches: 13.56, trimW: 1.00, trimH: 1.00, scanlineScale: 1 },  // MBP 16", "More Space"
+  { w: 2560, inches: 27.36, trimW: 1.17, trimH: 1.10, scanlineScale: 2 }   // DELL S3220DGF - downscaled 5K mode
+];
+
+// trimW / trimH are per-display, per-AXIS size nudges. >1 = bigger glyphs on
+// that axis. They are not a geometry correction - the geometry above already
+// matches physical size to 0.2%. They exist because equal physical size is not
+// equal apparent size across displays of very different pixel density:
+//
+//   MacBook 254 ppi -> 34.6 x 22.3 native panel px per glyph
+//   Dell     94 ppi -> 12.7 x  8.2
+//
+// At 8 pixels tall an MSDF glyph's strokes fall below a pixel, so they render
+// thin and grey. Less ink reads as smaller, however exactly the outline
+// measures. The Dell therefore has to be physically larger to look the same.
+
+// Fallback for an unrecognised display: match cell size in CSS pixels instead
+// of inches. Less accurate, but never worse than a fixed count.
+var FALLBACK_CELL_W_CSS = 17.28;   // the MacBook's cell, in CSS px
+var FALLBACK_CELL_H_CSS = 11.17;
+
+var w = window.innerWidth || screen.width;
+var h = window.innerHeight || screen.height;
+var best = null;
+for (var i = 0; i < PANELS.length; i++) {
+  if (Math.abs(PANELS[i].w - w) / PANELS[i].w < 0.03) { best = PANELS[i]; break; }
+}
+
+var cols, rows;
+if (best) {
+  // The window is the whole screen, so its aspect gives us physical height.
+  var wIn = best.inches;
+  var hIn = wIn * (h / w);
+  cols = (wIn * COLS_PER_INCH) / (best.trimW || 1);
+  rows = (hIn * ROWS_PER_INCH) / (best.trimH || 1);
+} else {
+  cols = w / FALLBACK_CELL_W_CSS;
+  rows = h / FALLBACK_CELL_H_CSS;
+}
+var clamp = function (n) { return Math.max(24, Math.min(400, Math.round(n))); };
+cols = clamp(cols);
+rows = clamp(rows);
+
+location.replace("index.html?animationSpeed=0.4&fallSpeed=0.3&cycleSpeed=0.04"
+  + "&raindropLength=0.75&speedSpread=1&speedVariance=0.95&driftRate=6"
+  + "&glyphHeightToWidth=1.35&glyphVerticalSpacing=0.95&fps=24"
+  + "&scanlines=0.235&scanlinePitch=2"   // CRT overlay; 0.235 = the 60/255 the canvas renderer uses
+  + "&scanlineScale=" + (best && best.scanlineScale || 1)
+  + "&numColumns=" + cols + "&numRows=" + rows
+  // The intro: start on a black screen and let the rain fill it in, a few
+  // columns at a time, instead of cutting to a screen already full of code.
+  // The activation front descends at exactly fallSpeed, so it takes longer on
+  // the taller Dell - correct, since a glyph is the same physical size on both.
+  // introSpread stretches the stagger between columns: 1 fills in ~30s.
+  + "&skipIntro=false&introSpread=1"
+  // Act 1 (0.6s..6.1s): escalating reality breakdown over the live screen.
+  // Act 2 (6.1s..7.0s): CRT collapse to pure black.
+  // Act 3 (7.5s+): Matrix rain begins dropping out of pure black (rainDelay=5).
+  + "&bgFadeDelay=0.6&bgFadeDuration=6.4&rainDelay=5.0&glitchStrength=1.0"
+  + "&suppressWarnings=true");
+</script>

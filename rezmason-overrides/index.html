@@ -1,0 +1,166 @@
+<!doctype html>
+<html>
+	<head>
+		<title>Matrix digital rain</title>
+		<meta charset="utf-8" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+		<style>
+			@supports (padding-top: env(safe-area-inset-top)) {
+				body {
+					padding: 0;
+					height: calc(100% + env(safe-area-inset-top));
+				}
+			}
+			body {
+				background: black;
+				overflow: hidden;
+				margin: 0;
+
+				font-family: monospace;
+				font-size: 2em;
+				text-align: center;
+			}
+
+			canvas {
+				width: 100vw;
+				height: 100vh;
+			}
+
+			p {
+				color: hsl(108, 90%, 70%);
+				text-shadow: hsl(108, 90%, 40%) 1px 0 10px;
+			}
+
+			.notice {
+				margin-top: 10em;
+				animation: fadeInAnimation ease 3s;
+				animation-iteration-count: 1;
+				animation-fill-mode: forwards;
+			}
+
+			@keyframes fadeInAnimation {
+				0% {
+					opacity: 0;
+				}
+				100% {
+					opacity: 1;
+				}
+			}
+
+			.pill {
+				display: inline-block;
+				background: gray;
+				border: 0.3em solid lightgray;
+				font-size: 1rem;
+				font-family: monospace;
+				color: white;
+				padding: 0.5em 1em;
+				border-radius: 2em;
+				min-width: 6rem;
+				margin: 3em;
+				text-decoration: none;
+				cursor: pointer;
+				text-transform: uppercase;
+				font-weight: bold;
+			}
+
+			/* CRT scanline overlay. Enabled with ?scanlines=<alpha>, off by default.
+			   Painted as a tiny canvas tile scaled to exact device pixels rather
+			   than a CSS gradient: at devicePixelRatio 2 a gradient stop lands on
+			   a half CSS pixel and the browser antialiases it into a soft wash
+			   instead of crisp lines. */
+			#crt {
+				position: fixed;
+				inset: 0;
+				pointer-events: none;
+				z-index: 10;
+				display: none;
+				background-repeat: repeat;
+				image-rendering: pixelated;
+			}
+
+			.blue {
+				background: linear-gradient(skyblue, blue, black, black, darkblue);
+				border-color: darkblue;
+				color: lightblue;
+			}
+
+			.blue:hover {
+				border-color: blue;
+				color: white;
+			}
+
+			.red {
+				background: linear-gradient(lightpink, crimson, black, black, darkred);
+				border-color: darkred;
+				color: lightpink;
+			}
+
+			.red:hover {
+				border-color: crimson;
+				color: white;
+			}
+		</style>
+	</head>
+	<body>
+		<!--
+			This is an implementation of the green code seen in The Matrix film and video game franchise.
+			This project demonstrates five concepts:
+					1. Drawing to floating point frame buffer objects, or 'FBO's,
+						 for performing computation and post-processing
+					2. GPU-side computation, with fragment shaders
+						 updating two alternating FBOs
+					3. Rendering crisp "vector" graphics, with a multiple-channel
+						 signed distance field (or 'MSDF')
+					4. Creating a blur/bloom effect from a texture pyramid
+					5. Color mapping with noise, to hide banding
+
+			For more information, please visit: https://github.com/Rezmason/matrix
+		 -->
+		<div id="crt"></div>
+		<script>
+			// Same pattern as the canvas renderer this project pairs with: a period of
+			// pitch*2 device pixels - one line at full alpha, one at half - and no
+			// horizontal variation. Built once, then repeated by the compositor, so it
+			// costs one extra layer and nothing per frame.
+			(function () {
+				var q = new URLSearchParams(location.search);
+				if (parseFloat(q.get("bgFadeDelay")) > 0 || parseFloat(q.get("bgFadeDuration")) > 0) {
+					document.documentElement.style.background = "transparent";
+					document.body.style.background = "transparent";
+				}
+				var alpha = parseFloat(q.get("scanlines"));
+				if (!(alpha > 0)) return;            // absent or 0: no layer at all
+				var pitch = Math.max(1, Math.round(parseFloat(q.get("scanlinePitch")) || 2));
+				// scanlineScale = backing-buffer pixels per physical panel pixel.
+				// A display running a downscaled HiDPI mode (macOS rendering 5120x2880
+				// onto a native 2560x1440 panel, say) averages a one-pixel line down to
+				// half a panel pixel and the scanlines vanish into a flat wash.
+				// devicePixelRatio is 2 either way, so the page cannot detect this -
+				// the caller has to say. Thickening the line by the same factor puts it
+				// back on whole panel pixels.
+				var scale = Math.max(1, Math.round(parseFloat(q.get("scanlineScale")) || 1));
+				var period = pitch * 2 * scale;
+				var tile = document.createElement("canvas");
+				tile.width = 1;
+				tile.height = period;
+				var t = tile.getContext("2d");
+				t.fillStyle = "rgba(0,0,0," + alpha + ")";
+				t.fillRect(0, 0, 1, scale);
+				t.fillStyle = "rgba(0,0,0," + alpha / 2 + ")";
+				t.fillRect(0, pitch * scale, 1, scale);
+				var dpr = window.devicePixelRatio || 1;
+				var el = document.getElementById("crt");
+				if (parseFloat(q.get("bgFadeDelay")) > 0 || parseFloat(q.get("bgFadeDuration")) > 0) {
+					el.style.opacity = "0";
+				}
+				el.style.backgroundImage = "url(" + tile.toDataURL() + ")";
+				el.style.backgroundSize = 1 / dpr + "px " + period / dpr + "px";
+				el.style.display = "block";
+			})();
+		</script>
+		<script type="module" src="js/main.js"></script>
+	</body>
+</html>
